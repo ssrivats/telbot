@@ -1,34 +1,50 @@
 import os
 import logging
+import re
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Temporary storage (in memory for now)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN is required")
+
 user_watches = {}   # user_id → list of event_codes
+
+def extract_event_code(text: str):
+    # Try to find ET followed by numbers
+    match = re.search(r'(ET\d{7,})', text, re.I)
+    if match:
+        return match.group(1).upper()
+    
+    # Try to extract from full BMS URL
+    match = re.search(r'/([A-Z]{2}\d{7,})', text)
+    if match:
+        return match.group(1).upper()
+    
+    return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 *BMS Watchlist Bot Ready!*\n\n"
-        "Send me a movie name or BMS link to start monitoring.\n"
-        "Example: `/add Youth` or just paste the full BMS page link."
+        "🎬 *BMS Watchlist Bot*\n\n"
+        "Send me a movie name or the **full BMS link** to start monitoring ELITE seats at Sathyam, HDFC Express Avenue & Palazzo.\n\n"
+        "Examples:\n"
+        "• `/add Youth`\n"
+        "• Paste the full BMS movie page link"
     )
 
 async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    # Simple extraction for now
-    event_code = None
-    import re
-    match = re.search(r'(ET\d{7,})', text, re.I)
-    if match:
-        event_code = match.group(1).upper()
-
+    event_code = extract_event_code(text)
+    
     if not event_code:
-        await update.message.reply_text("❌ Could not find ET code. Please send the full BMS link.")
+        await update.message.reply_text(
+            "❌ Could not find ET code.\n\n"
+            "Please paste the **full BMS movie link**.\n"
+            "Example: https://in.bookmyshow.com/movies/chennai/youth/ET00485590"
+        )
         return
 
     user_id = update.effective_user.id
@@ -36,17 +52,25 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_watches[user_id] = []
 
     if event_code in user_watches[user_id]:
-        await update.message.reply_text("✅ Already monitoring this movie.")
+        await update.message.reply_text(f"✅ Already monitoring {event_code}")
         return
 
     user_watches[user_id].append(event_code)
-    await update.message.reply_text(f"✅ Added {event_code} to your watchlist.\nI'll alert you when ELITE seats open.")
+
+    movie_name = text.replace("/add", "").strip() or event_code
+
+    await update.message.reply_text(
+        f"✅ Added **{movie_name}** ({event_code}) to your watchlist.\n\n"
+        f"I'll monitor ELITE seats at your 3 PVRs and alert you when back seats open."
+    )
+
+    # TODO: Start actual monitoring here (next step)
 
 async def list_watches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     watches = user_watches.get(user_id, [])
     if not watches:
-        await update.message.reply_text("You have no watches yet.")
+        await update.message.reply_text("You have no active watches.")
         return
     await update.message.reply_text("Your watches:\n" + "\n".join(watches))
 
@@ -58,7 +82,7 @@ def main():
     app.add_handler(CommandHandler("list", list_watches))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_movie))
 
-    print("🚀 Telegram Bot started...")
+    logger.info("🚀 BMS Watchlist Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":
