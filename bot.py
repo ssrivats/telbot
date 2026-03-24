@@ -14,7 +14,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is required")
 
-user_watches = {}   # user_id → list of event_codes (simple for now)
+user_watches = {}   # user_id → list of event_codes
 
 BMS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -33,20 +33,22 @@ def _slugify(name):
     s = re.sub(r'[\s-]+', '-', s)
     return s.strip('-')
 
-# Simple monitoring placeholder (we'll expand later)
+# Simple monitoring function (placeholder for now)
 def start_monitoring(user_id, event_code, title):
     logger.info(f"[{user_id}] Monitoring started for {title} ({event_code})")
-    # For now just log. Real seeding + polling will be added after we stabilize
-    time.sleep(10)
-    logger.info(f"[{user_id}] Monitoring active for {title}")
+    # Simulate monitoring for testing
+    time.sleep(8)
+    logger.info(f"[{user_id}] Still monitoring {title}...")
+    # In real version we will add Playwright + polling here
 
 # Bot Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 *BMS Watchlist Bot*\n\n"
         "Paste the full BMS movie link to start monitoring ELITE seats.\n"
-        "Use /list to see your watches\n"
-        "Use /stop ETxxxxxx to stop a movie."
+        "Commands:\n"
+        "/list - Show your watches\n"
+        "/stop ETxxxxxx - Stop monitoring a movie"
     )
 
 async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,11 +63,11 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Added **{title}** ({event_code})\n\n"
-        f"Monitoring ELITE seats at your 3 PVRs...\n"
+        f"Monitoring ELITE seats at Sathyam, HDFC Express Avenue & Palazzo.\n"
         f"I'll alert you when back seats open."
     )
 
-    # Start monitoring
+    # Start monitoring thread
     threading.Thread(target=start_monitoring, args=(user_id, event_code, title), daemon=True).start()
 
 async def list_watches(update: Update, context: ContextTypes.DEFAULT_TYPE):
