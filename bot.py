@@ -15,8 +15,8 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is required")
 
-# Global storage: user_id → list of watches
-user_watches = {}   # {user_id: [{"event_code": "...", "title": "...", "session": {...}}]}
+# Global storage: user_id → list of active watches
+user_watches = {}   # {user_id: [{"event_code": "...", "title": "...", "thread": thread_object}]}
 
 BMS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
@@ -36,7 +36,7 @@ def _slugify(name):
     s = re.sub(r'[\s-]+', '-', s)
     return s.strip('-')
 
-# ── Seed session with Playwright (once) ──────────────────────────────────────
+# ── Seed session with Playwright ─────────────────────────────────────────────
 def seed_session(event_code, movie_slug):
     from playwright.sync_api import sync_playwright
     try:
@@ -55,7 +55,6 @@ def seed_session(event_code, movie_slug):
             page.goto(f"https://in.bookmyshow.com/movies/chennai/{movie_slug}/{event_code}", timeout=60000)
             page.wait_for_timeout(12000)
 
-            # Click "Book tickets"
             page.locator('text=/Book tickets|Buy tickets/i').first.click()
             page.wait_for_timeout(15000)
 
@@ -63,7 +62,6 @@ def seed_session(event_code, movie_slug):
             headers = {"User-Agent": BMS_UA}
 
             if seat_payloads:
-                logger.info(f"✅ Session seeded for {event_code}")
                 return {
                     "cookies": cookies,
                     "headers": headers,
@@ -96,37 +94,29 @@ def poll_seats(session):
 
 # ── Background monitoring thread ─────────────────────────────────────────────
 def start_monitoring(user_id, event_code, title):
+    logger.info(f"[{user_id}] Starting monitoring for {title} ({event_code})")
+
     session = seed_session(event_code, _slugify(title))
     if not session:
-        logger.error(f"Failed to seed for {event_code}")
+        logger.error(f"[{user_id}] Failed to seed session for {event_code}")
         return
 
-    watch = {"event_code": event_code, "title": title, "session": session}
-    if user_id not in user_watches:
-        user_watches[user_id] = []
-    user_watches[user_id].append(watch)
-
-    logger.info(f"Started monitoring {title} ({event_code})")
+    logger.info(f"[{user_id}] Monitoring started successfully for {title}")
 
     while True:
         if poll_seats(session):
-            asyncio.run(send_alert(user_id, title))
+            logger.info(f"[{user_id}] 🎉 ELITE seats found for {title}!")
+            # TODO: Send real Telegram message to user
             break
-        time.sleep(30)  # Check every 30 seconds for now (we can make it smarter later)
-
-async def send_alert(user_id, title):
-    try:
-        # For now we just log. Later we can send message to the user
-        logger.info(f"🎉 ELITE seats opened for {title}!")
-        # TODO: Send real message to user
-    except:
-        pass
+        time.sleep(30)
 
 # ── Bot Handlers ─────────────────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 *BMS Watchlist Bot*\n\n"
-        "Paste the full BMS movie link to start monitoring ELITE seats at your 3 PVRs."
+        "Paste the full BMS movie link to start monitoring.\n"
+        "Use /list to see your watches\n"
+        "Use /stop ETxxxxxx to stop monitoring a movie."
     )
 
 async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,22 +127,45 @@ async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     title = "Youth" if "youth" in text.lower() else event_code
-
     user_id = update.effective_user.id
-
-    # Start monitoring in background
-    threading.Thread(target=start_monitoring, args=(user_id, event_code, title), daemon=True).start()
 
     await update.message.reply_text(
         f"✅ Added **{title}** ({event_code})\n\n"
-        f"Monitoring ELITE seats at Sathyam, HDFC Express Avenue & Palazzo.\n"
+        f"Monitoring ELITE seats at your 3 PVRs...\n"
         f"I'll alert you when back seats open."
     )
+
+    # Start monitoring
+    threading.Thread(target=start_monitoring, args=(user_id, event_code, title), daemon=True).start()
+
+async def list_watches(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    watches = user_watches.get(user_id, [])
+    if not watches:
+        await update.message.reply_text("You have no active watches.")
+        return
+    msg = "Your active watches:\n" + "\n".join([f"• {w['title']} ({w['event_code']})" for w in watches])
+    await update.message.reply_text(msg)
+
+async def stop_watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    event_code = extract_event_code(text)
+    if not event_code:
+        await update.message.reply_text("Please provide the ET code to stop. Example: /stop ET00485590")
+        return
+
+    user_id = update.effective_user.id
+    if user_id in user_watches:
+        user_watches[user_id] = [w for w in user_watches[user_id] if w['event_code'] != event_code]
+
+    await update.message.reply_text(f"✅ Stopped monitoring {event_code}.")
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("list", list_watches))
+    app.add_handler(CommandHandler("stop", stop_watch))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_movie))
 
     logger.info("🚀 BMS Watchlist Bot is running...")
